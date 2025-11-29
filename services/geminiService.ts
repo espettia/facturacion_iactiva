@@ -135,11 +135,14 @@ export const sendMessageToAgent = async (
                 }
 
                 // Send tool response and await the model's follow-up
-                const toolResponse = await chatSession.sendToolResponse({
-                    functionResponses: [{
-                        id: fc.id,
-                        name: fc.name,
-                        response: { result: toolFeedback }
+                // We use sendMessage to provide the functionResponse
+                const toolResponse = await chatSession.sendMessage({
+                    message: [{
+                        functionResponse: {
+                            id: fc.id,
+                            name: fc.name,
+                            response: { result: toolFeedback }
+                        }
                     }]
                 });
 

@@ -30,7 +30,7 @@ export default function App() {
   }));
 
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { id: '1', role: 'model', text: '¡Hola! Soy tu asistente de facturación. ¿Qué factura deseas generar hoy?' }
+    { id: '1', role: 'model', text: '¡Hola! Soy tu asistente de facturación. Dime los datos del cliente y los productos para generar la factura.' }
   ]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -104,6 +104,10 @@ export default function App() {
           if (response.dataUpdates?.items) {
              const newItems = response.dataUpdates.items || [];
              if (newItems.length > 0) {
+                 // Determine if we should append or replace. 
+                 // For now, let's assume if items are provided, they are additions unless the user said "clear".
+                 // However, to keep it simple with the tool output, we append.
+                 // A smarter agent might handle IDs to update specific items.
                  newData.items = [...newData.items, ...newItems];
              }
           }
@@ -160,7 +164,7 @@ export default function App() {
     window.print();
   };
 
-  const handleSaveInvoice = () => {
+  const handleRegisterInvoice = () => {
     if (!isReady) return;
 
     // Save to history
@@ -176,7 +180,7 @@ export default function App() {
     setMessages(prev => [...prev, {
       id: Date.now().toString(),
       role: 'model',
-      text: `✅ Factura ${invoiceData.serie}-${invoiceData.numero} guardada correctamente en el historial.`
+      text: `✅ Factura ${invoiceData.serie}-${invoiceData.numero} registrada correctamente. ¡Lista para imprimir!`
     }]);
 
     // Reset form for next invoice
@@ -206,7 +210,7 @@ export default function App() {
   };
 
   // Determine if invoice is ready to print
-  const isReady = invoiceData.cliente.nombre && invoiceData.cliente.numero && invoiceData.items.length > 0;
+  const isReady = !!(invoiceData.cliente.nombre && invoiceData.cliente.numero && invoiceData.items.length > 0);
 
   return (
     <div className="flex h-screen bg-gray-100 font-sans">
@@ -277,11 +281,12 @@ export default function App() {
         <div className="p-4 bg-white border-t">
           {/* Missing Fields Alerts */}
           {!isReady && (
-             <div className="mb-3 p-2 bg-yellow-50 border border-yellow-100 rounded text-xs text-yellow-700 flex items-start gap-2">
+             <div className="mb-3 p-3 bg-orange-50 border border-orange-100 rounded-lg text-xs text-orange-800 flex items-start gap-2 animate-pulse">
                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-               <div>
-                 <span className="font-semibold">Falta información:</span>
-                 <ul className="list-disc list-inside mt-1">
+               <div className="flex-1">
+                 <span className="font-bold block mb-1">Factura Incompleta</span>
+                 <p>Completa los siguientes datos hablando con el agente para poder imprimir:</p>
+                 <ul className="list-disc list-inside mt-1 ml-1 text-orange-700">
                    {!invoiceData.cliente.nombre && <li>Nombre del cliente</li>}
                    {!invoiceData.cliente.numero && <li>DNI o RUC del cliente</li>}
                    {invoiceData.items.length === 0 && <li>Items para facturar</li>}
@@ -334,24 +339,24 @@ export default function App() {
             </h2>
             <div className="flex gap-2">
                 <button 
-                    onClick={handleSaveInvoice}
+                    onClick={handleRegisterInvoice}
                     disabled={!isReady}
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium shadow-sm transition-all ${
                         isReady 
                         ? 'bg-green-600 text-white hover:bg-green-700 hover:shadow-md' 
-                        : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        : 'bg-gray-300 text-gray-500 cursor-not-allowed opacity-75'
                     }`}
                 >
                     <CheckCircle className="w-4 h-4" />
-                    Emitir & Guardar
+                    Registrar Factura
                 </button>
                 <button 
                     onClick={handlePrint}
                     disabled={!isReady}
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium shadow-sm transition-all ${
                         isReady 
-                        ? 'bg-primary text-white hover:bg-blue-700 hover:shadow-md' 
-                        : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        ? 'bg-secondary text-white hover:bg-slate-700 hover:shadow-md' 
+                        : 'bg-gray-300 text-gray-500 cursor-not-allowed opacity-75'
                     }`}
                 >
                     <Printer className="w-4 h-4" />
