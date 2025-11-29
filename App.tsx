@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Mic, Printer, Sparkles, AlertCircle, FileText, Settings, X, Save } from 'lucide-react';
+import { Send, Mic, Printer, Sparkles, AlertCircle, FileText, Settings, X, Save, History, CheckCircle } from 'lucide-react';
 import { InvoicePreview } from './components/InvoicePreview';
+import { HistoryModal } from './components/HistoryModal';
 import { InvoiceData, INITIAL_INVOICE, ChatMessage, Company, DEFAULT_COMPANY } from './types';
 import { sendMessageToAgent, resetSession } from './services/geminiService';
 
@@ -8,12 +9,24 @@ export default function App() {
   // --- State ---
   const [companyConfig, setCompanyConfig] = useState<Company>(() => {
     const saved = localStorage.getItem('companyConfig');
-    return saved ? JSON.parse(saved) : DEFAULT_COMPANY;
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // Ensure IGV exists for backward compatibility
+      return { ...DEFAULT_COMPANY, ...parsed };
+    }
+    return DEFAULT_COMPANY;
+  });
+
+  const [invoiceHistory, setInvoiceHistory] = useState<InvoiceData[]>(() => {
+    const saved = localStorage.getItem('invoiceHistory');
+    return saved ? JSON.parse(saved) : [];
   });
   
   const [invoiceData, setInvoiceData] = useState<InvoiceData>(() => ({
     ...INITIAL_INVOICE,
-    empresa: companyConfig // Initialize with loaded config
+    empresa: companyConfig,
+    // Auto-increment number based on history if available
+    numero: String((localStorage.getItem('lastInvoiceNumber') ? parseInt(localStorage.getItem('lastInvoiceNumber')!) + 1 : 1234)).padStart(8, '0')
   }));
 
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -23,6 +36,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
 
   // Settings form state
   const [settingsForm, setSettingsForm] = useState<Company>(companyConfig);
@@ -44,6 +58,11 @@ export default function App() {
     }));
     localStorage.setItem('companyConfig', JSON.stringify(companyConfig));
   }, [companyConfig]);
+
+  // Sync history to localStorage
+  useEffect(() => {
+    localStorage.setItem('invoiceHistory', JSON.stringify(invoiceHistory));
+  }, [invoiceHistory]);
 
   // --- Handlers ---
 
@@ -71,8 +90,8 @@ export default function App() {
     setIsLoading(true);
 
     try {
-      // Pass the current company config to the agent
-      const response = await sendMessageToAgent(inputText, companyConfig);
+      // Pass the current company config AND current invoice state to the agent
+      const response = await sendMessageToAgent(inputText, companyConfig, invoiceData);
       
       if (response.dataUpdates) {
         setInvoiceData(prev => {
@@ -141,6 +160,44 @@ export default function App() {
     window.print();
   };
 
+  const handleSaveInvoice = () => {
+    if (!isReady) return;
+
+    // Save to history
+    const newHistory = [invoiceData, ...invoiceHistory];
+    setInvoiceHistory(newHistory);
+    
+    // Calculate next invoice number
+    const currentNum = parseInt(invoiceData.numero);
+    const nextNum = (currentNum + 1).toString().padStart(8, '0');
+    localStorage.setItem('lastInvoiceNumber', currentNum.toString());
+
+    // Notify user
+    setMessages(prev => [...prev, {
+      id: Date.now().toString(),
+      role: 'model',
+      text: `✅ Factura ${invoiceData.serie}-${invoiceData.numero} guardada correctamente en el historial.`
+    }]);
+
+    // Reset form for next invoice
+    setInvoiceData({
+      ...INITIAL_INVOICE,
+      empresa: companyConfig,
+      numero: nextNum,
+      fecha_emision: new Date().toLocaleDateString('es-PE')
+    });
+  };
+
+  const handleLoadFromHistory = (invoice: InvoiceData) => {
+    setInvoiceData(invoice);
+    // Optionally add a message saying we are viewing history
+    setMessages(prev => [...prev, {
+      id: Date.now().toString(),
+      role: 'model',
+      text: `👁️ Visualizando factura histórica: ${invoice.serie}-${invoice.numero}`
+    }]);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -165,16 +222,25 @@ export default function App() {
               <p className="text-xs text-gray-500">Impulsado por Gemini 2.5</p>
             </div>
           </div>
-          <button 
-            onClick={() => {
-                setSettingsForm(companyConfig);
-                setShowSettings(true);
-            }}
-            className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 transition-colors"
-            title="Configuración de Empresa"
-          >
-            <Settings className="w-5 h-5" />
-          </button>
+          <div className="flex gap-1">
+            <button 
+                onClick={() => setShowHistory(true)}
+                className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 transition-colors"
+                title="Historial de Facturas"
+            >
+                <History className="w-5 h-5" />
+            </button>
+            <button 
+                onClick={() => {
+                    setSettingsForm(companyConfig);
+                    setShowSettings(true);
+                }}
+                className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 transition-colors"
+                title="Configuración de Empresa"
+            >
+                <Settings className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
@@ -262,22 +328,36 @@ export default function App() {
       {/* Main Content / Invoice Preview */}
       <div className="flex-1 p-4 md:p-8 bg-gray-200 overflow-y-auto relative flex flex-col items-center">
         {/* Toolbar */}
-        <div className="w-full max-w-[210mm] mb-4 flex justify-between items-center no-print">
+        <div className="w-full max-w-[210mm] mb-4 flex flex-col sm:flex-row justify-between items-center no-print gap-4">
             <h2 className="text-lg font-bold text-gray-700 flex items-center gap-2">
                 <FileText className="w-5 h-5"/> Vista Previa
             </h2>
-            <button 
-                onClick={handlePrint}
-                disabled={!isReady}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium shadow-sm transition-all ${
-                    isReady 
-                    ? 'bg-primary text-white hover:bg-blue-700 hover:shadow-md' 
-                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                }`}
-            >
-                <Printer className="w-4 h-4" />
-                Imprimir Factura
-            </button>
+            <div className="flex gap-2">
+                <button 
+                    onClick={handleSaveInvoice}
+                    disabled={!isReady}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium shadow-sm transition-all ${
+                        isReady 
+                        ? 'bg-green-600 text-white hover:bg-green-700 hover:shadow-md' 
+                        : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    }`}
+                >
+                    <CheckCircle className="w-4 h-4" />
+                    Emitir & Guardar
+                </button>
+                <button 
+                    onClick={handlePrint}
+                    disabled={!isReady}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium shadow-sm transition-all ${
+                        isReady 
+                        ? 'bg-primary text-white hover:bg-blue-700 hover:shadow-md' 
+                        : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    }`}
+                >
+                    <Printer className="w-4 h-4" />
+                    Imprimir
+                </button>
+            </div>
         </div>
 
         <InvoicePreview data={invoiceData} />
@@ -327,16 +407,29 @@ export default function App() {
                   className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/50 outline-none"
                 />
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Moneda</label>
-                <select 
-                  value={settingsForm.moneda}
-                  onChange={e => setSettingsForm({...settingsForm, moneda: e.target.value})}
-                  className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/50 outline-none"
-                >
-                  <option value="PEN">Soles (PEN)</option>
-                  <option value="USD">Dólares (USD)</option>
-                </select>
+              <div className="flex gap-4">
+                  <div className="flex-1">
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Moneda</label>
+                    <select 
+                      value={settingsForm.moneda}
+                      onChange={e => setSettingsForm({...settingsForm, moneda: e.target.value})}
+                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/50 outline-none"
+                    >
+                      <option value="PEN">Soles (PEN)</option>
+                      <option value="USD">Dólares (USD)</option>
+                    </select>
+                  </div>
+                  <div className="w-24">
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">IGV (%)</label>
+                    <input 
+                      type="number" 
+                      min="0"
+                      max="100"
+                      value={settingsForm.igv}
+                      onChange={e => setSettingsForm({...settingsForm, igv: Number(e.target.value)})}
+                      className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/50 outline-none"
+                    />
+                  </div>
               </div>
             </div>
             <div className="p-4 border-t bg-gray-50 flex justify-end gap-2">
@@ -357,6 +450,14 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* History Modal */}
+      <HistoryModal 
+        isOpen={showHistory} 
+        onClose={() => setShowHistory(false)} 
+        history={invoiceHistory}
+        onView={handleLoadFromHistory}
+      />
     </div>
   );
 }

@@ -10,8 +10,9 @@ export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
     return data.items.reduce((acc, item) => acc + (item.cantidad * item.precio), 0);
   };
 
+  const igvRate = (data.empresa.igv ?? 18) / 100;
   const subtotal = calculateSubtotal();
-  const igv = subtotal * 0.18;
+  const igv = subtotal * igvRate;
   const total = subtotal + igv;
 
   const formatCurrency = (amount: number) => {
@@ -106,7 +107,7 @@ export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
               <span>{formatCurrency(subtotal)}</span>
             </div>
             <div className="flex justify-between text-sm text-gray-600">
-              <span>IGV (18%)</span>
+              <span>IGV ({data.empresa.igv ?? 18}%)</span>
               <span>{formatCurrency(igv)}</span>
             </div>
             <div className="flex justify-between text-xl font-bold text-gray-800 border-t pt-2 mt-2">

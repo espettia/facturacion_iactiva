@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, FunctionDeclaration, Tool, Schema } from "@google/genai";
-import { Client, InvoiceItem, Company } from "../types";
+import { Client, InvoiceItem, Company, InvoiceData } from "../types";
 
 // We define the structure we want the AI to extract
 const updateInvoiceSchema: Schema = {
@@ -32,7 +32,7 @@ const updateInvoiceSchema: Schema = {
 
 const updateInvoiceTool: FunctionDeclaration = {
   name: "updateInvoice",
-  description: "Actualiza los datos de la factura (cliente e items) basándose en la solicitud del usuario. Si la información es parcial, rellena lo que tengas.",
+  description: "Actualiza los datos de la factura (cliente e items).",
   parameters: updateInvoiceSchema,
 };
 
@@ -41,20 +41,20 @@ const tools: Tool[] = [{ functionDeclarations: [updateInvoiceTool] }];
 // Dynamic System Instruction generator
 const createSystemInstruction = (company: Company) => `
 Eres un asistente experto en facturación electrónica para "${company.razon_social}".
-Tu objetivo es ayudar al usuario a generar una factura extrayendo información de su lenguaje natural.
+Tu objetivo es ayudar al usuario a generar una factura válida completando TODOS los campos necesarios.
 
-Datos de la empresa (NO preguntar por esto, ya lo sabes):
+Datos de la empresa emisora (Tus datos):
 - RUC: ${company.ruc}
 - Razón Social: ${company.razon_social}
 - Moneda: ${company.moneda}
+- Impuesto (IGV): ${company.igv ?? 18}%
 
 Reglas:
-1. Debes extraer información del CLIENTE (Nombre, DNI/RUC) y los ITEMS (Descripción, Cantidad, Precio).
-2. Si el usuario menciona "factura por diseño" y no da precio, ASUME un precio razonable o pregunta (ej: "curso de diseño" = 100.00). Si no da cantidad, asume 1.
-3. SIEMPRE llama a la función 'updateInvoice' si detectas CUALQUIER dato nuevo relevante (cliente o items).
-4. Si faltan datos obligatorios (Nombre Cliente, Número Documento, o Items), responde amablemente pidiendo SOLO lo que falta.
-5. Los DNI tienen 8 dígitos (tipo_doc = "1"). Los RUC tienen 11 dígitos (tipo_doc = "6").
-6. Sé breve y profesional.
+1. Extrae datos del CLIENTE (Nombre, DNI/RUC) y los ITEMS (Descripción, Cantidad, Precio).
+2. Si el usuario menciona un servicio sin precio, intenta inferirlo o PREGUNTA.
+3. SIEMPRE llama a la función 'updateInvoice' si detectas intención de facturar, incluso con datos parciales.
+4. IMPORTANTE: Después de llamar a la herramienta, revisa la respuesta del sistema. Si indica que faltan datos (como nombre, dni o items), PIDE ESOS DATOS al usuario amablemente.
+5. No inventes datos. Si falta el DNI, pídelo.
 `;
 
 let chatSession: any = null;
@@ -85,7 +85,11 @@ export interface AgentResponse {
   };
 }
 
-export const sendMessageToAgent = async (message: string, company: Company): Promise<AgentResponse> => {
+export const sendMessageToAgent = async (
+  message: string, 
+  company: Company,
+  currentInvoice: InvoiceData
+): Promise<AgentResponse> => {
   // Initialize or Re-initialize if company settings changed
   if (!chatSession || JSON.stringify(company) !== currentCompanyJson) {
     initializeChat(company);
@@ -96,8 +100,8 @@ export const sendMessageToAgent = async (message: string, company: Company): Pro
     
     let responseText = "";
     let extractedData: any = {};
+    let functionCallOccurred = false;
 
-    // Check for function calls
     const candidates = result.candidates;
     if (candidates && candidates[0]) {
       const parts = candidates[0].content.parts;
@@ -108,27 +112,53 @@ export const sendMessageToAgent = async (message: string, company: Company): Pro
         }
         
         if (part.functionCall) {
+            functionCallOccurred = true;
             const fc = part.functionCall;
             if (fc.name === 'updateInvoice') {
-                // Merge arguments into extractedData
                 const args = fc.args as any;
                 extractedData = { ...extractedData, ...args };
                 
-                await chatSession.sendToolResponse({
+                // Validate missing fields based on current state + updates
+                const tempClient = { ...currentInvoice.cliente, ...(extractedData.cliente || {}) };
+                const tempItems = [...currentInvoice.items, ...(extractedData.items || [])];
+                
+                const missing = [];
+                if (!tempClient.nombre) missing.push("Nombre del Cliente");
+                if (!tempClient.numero) missing.push("Número de Documento (DNI/RUC)");
+                if (tempItems.length === 0) missing.push("Al menos un producto o servicio");
+
+                let toolFeedback = "Datos procesados.";
+                if (missing.length > 0) {
+                   toolFeedback += ` ADVERTENCIA: Faltan los siguientes datos obligatorios para emitir la factura: ${missing.join(', ')}. Por favor pide estos datos al usuario.`;
+                } else {
+                   toolFeedback += " Todos los datos obligatorios están presentes. Puedes confirmar que la factura está lista.";
+                }
+
+                // Send tool response and await the model's follow-up
+                const toolResponse = await chatSession.sendToolResponse({
                     functionResponses: [{
                         id: fc.id,
                         name: fc.name,
-                        response: { result: "Factura actualizada exitosamente." }
+                        response: { result: toolFeedback }
                     }]
                 });
+
+                // Get the text from the model's response to the tool output
+                if (toolResponse.candidates && toolResponse.candidates[0]) {
+                    const toolParts = toolResponse.candidates[0].content.parts;
+                    const toolReplyText = toolParts.map((p: any) => p.text).join('');
+                    if (toolReplyText) {
+                        responseText = toolReplyText; // Replace initial thought with final response
+                    }
+                }
             }
         }
       }
     }
 
-    // If text is empty (sometimes model just calls function), add a default
+    // Fallback if no text was generated
     if (!responseText && Object.keys(extractedData).length > 0) {
-        responseText = "He actualizado los datos de la factura.";
+        responseText = "He actualizado los datos. ¿Falta algo más?";
     }
 
     return {
@@ -139,7 +169,7 @@ export const sendMessageToAgent = async (message: string, company: Company): Pro
   } catch (error) {
     console.error("Error in Gemini communication:", error);
     return {
-      text: "Lo siento, hubo un error al procesar tu solicitud. Por favor intenta de nuevo.",
+      text: "Lo siento, hubo un error de comunicación. Intenta de nuevo.",
     };
   }
 };

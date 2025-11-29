@@ -3,6 +3,7 @@ export interface Company {
   razon_social: string;
   moneda: string;
   direccion: string;
+  igv: number; // Percentage, e.g., 18 for 18%
 }
 
 export interface Client {
@@ -39,7 +40,8 @@ export const DEFAULT_COMPANY: Company = {
   ruc: "20123456789",
   razon_social: "EMPRESA SAC",
   moneda: "PEN",
-  direccion: "Av. Principal 123, Lima, Perú"
+  direccion: "Av. Principal 123, Lima, Perú",
+  igv: 18 // Default 18%
 };
 
 export const INITIAL_INVOICE: InvoiceData = {
