@@ -1,0 +1,7 @@
+{
+  "name": "Factura Inteligente AI",
+  "description": "Generador de facturas electrónicas usando lenguaje natural y voz con Gemini.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
